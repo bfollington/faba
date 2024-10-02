@@ -1055,6 +1055,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags 1.3.2",
  "notan",
+ "sepax2d",
  "serde",
  "serde_json",
 ]
@@ -1889,6 +1890,12 @@ dependencies = [
  "smithay-client-toolkit",
  "tiny-skia",
 ]
+
+[[package]]
+name = "sepax2d"
+version = "0.3.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3925324849acde7d173737887cd3f78a1b6c587d6eedbadc4e334f45259e7720"
 
 [[package]]
 name = "serde"

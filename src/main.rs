@@ -4,6 +4,7 @@ use notan::prelude::*;
 
 mod player;
 mod tilemap;
+mod vertices;
 
 use player::Player;
 use tilemap::{SlopeType, TileMap, TileType, TILE_SIZE};
@@ -34,15 +35,25 @@ fn main() -> Result<(), String> {
 }
 
 fn setup(_app: &mut App, gfx: &mut Graphics) -> State {
-    let mut player = Player::new(50.0, 80.0);
-    let mut tilemap = TileMap::new(20, 15);
+    let mut player = Player::new(50.0, 80.0, 24., 24.);
+    let mut tilemap = TileMap::new(20, 20);
 
     // Set up some tiles for testing
     for x in 0..20 {
         tilemap.set_tile(x, 14, TileType::Solid); // Ground
+        tilemap.set_tile(x, 15, TileType::Solid); // Ground
+        tilemap.set_tile(x, 16, TileType::Solid); // Ground
     }
     tilemap.set_tile(10, 13, TileType::Solid); // Wall
-    tilemap.set_tile(5, 13, TileType::Slope(SlopeType::RightUp)); // Slope
+                                               // Create a big up ramp
+    for x in 5..10 {
+        tilemap.set_tile(x, 14 - (x - 5), TileType::Slope(SlopeType::LeftUp));
+    }
+
+    // Create a big down ramp
+    for x in 10..15 {
+        tilemap.set_tile(x, 10 + (x - 10), TileType::Slope(SlopeType::RightUp));
+    }
 
     let font = gfx
         .create_font(include_bytes!("../assets/Ubuntu-B.ttf"))
@@ -72,10 +83,7 @@ fn update(app: &mut App, state: &mut State) {
     if jump_pressed {
         state.player.jump();
     }
-    if jump_released {
-        state.player.release_jump();
-    }
-    state.player.update(&state.tilemap, dt);
+    state.player.update(&state.tilemap.collision_mask(), dt);
 }
 
 fn draw(gfx: &mut Graphics, state: &mut State) {
@@ -83,10 +91,11 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
     draw.clear(Color::BLACK);
 
     draw_tilemap(&mut draw, &state.tilemap);
-    draw_player(&mut draw, &state.player);
+    &state.player.render(&mut draw);
 
     // Debug rendering
-    state.player.debug_render(&mut draw, &state.tilemap);
+    state.player.debug_render(&mut draw, &state.font);
+    state.tilemap.debug_render(&mut draw, &state.font);
 
     // Draw FPS and player position
     draw.text(&state.font, &format!("FPS: {}", &state.fps))
@@ -98,7 +107,7 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
         &state.font,
         &format!(
             "Pos: ({:.2}, {:.2})",
-            state.player.pos.x, state.player.pos.y
+            state.player.polygon.position.0, state.player.polygon.position.1
         ),
     )
     .position(10.0, 40.0)
@@ -144,9 +153,4 @@ fn draw_tilemap(draw: &mut Draw, tilemap: &TileMap) {
             }
         }
     }
-}
-
-fn draw_player(draw: &mut Draw, player: &Player) {
-    draw.rect((player.pos.x, player.pos.y), (player.size.x, player.size.y))
-        .color(Color::WHITE);
 }

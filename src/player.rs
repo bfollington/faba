@@ -1,424 +1,246 @@
-use crate::tilemap::{SlopeType, TileMap, TileType, TILE_SIZE};
-use bitflags::bitflags;
 use notan::draw::*;
 use notan::math::{Rect, Vec2};
 use notan::prelude::*;
 
-bitflags! {
-    pub struct CollisionFlags: u16 {
-        const NONE = 0;
-        const LEFT_WALL = 1 << 0;
-        const RIGHT_WALL = 1 << 1;
-        const TOP_WALL = 1 << 2;
-        const BOTTOM_WALL = 1 << 3;
-        const LEFT_SLOPE = 1 << 4;
-        const RIGHT_SLOPE = 1 << 5;
-        const IN_WATER = 1 << 6;
-    }
-}
+use sepax2d::aabb::AABB;
+use sepax2d::capsule::Capsule;
+use sepax2d::circle::Circle;
+use sepax2d::polygon::Polygon;
+use sepax2d::sat_collision;
 
-#[derive(Clone, Copy, Debug)]
-enum CollisionType {
-    Solid,
-    Slope(SlopeType),
-}
+use crate::vertices::{ToTuple, ToVec2, Vertices};
+
+const MOVE_SPEED: f32 = 200.0;
+const JUMP_FORCE: f32 = -300.0;
+const GRAVITY: f32 = 980.0;
+const MAX_FALL_SPEED: f32 = 500.0;
+const GROUND_FRICTION: f32 = 0.9;
+const AIR_RESISTANCE: f32 = 0.99;
+const SLOPE_TOLERANCE: f32 = 0.7; // Cosine of maximum slope angle
 
 pub struct Player {
-    pub pos: Vec2,
-    pub vel: Vec2,
+    pub polygon: Polygon,
+    pub velocity: Vec2,
     pub size: Vec2,
-    pub collision_flags: CollisionFlags,
-    pub direction: Direction,
-    jump_buffer: f32,
-    coyote_time: f32,
-    is_jumping: bool,
-    pub last_collision: Option<CollisionType>,
+    pub is_grounded: bool,
+    pub jump_buffer: f32,
+    pub coyote_time: f32,
+    pub last_mtv: Option<(f32, f32)>,
 }
-
-#[derive(PartialEq, Clone, Copy)]
-pub enum Direction {
-    Left,
-    Right,
-}
-
-trait Overlaps {
-    fn overlaps(&self, other: &Rect) -> bool;
-}
-
-impl Overlaps for Rect {
-    fn overlaps(&self, other: &Rect) -> bool {
-        self.x < other.x + other.width
-            && self.x + self.width > other.x
-            && self.y < other.y + other.height
-            && self.y + self.height > other.y
-    }
-}
-
-const MOVE_SPEED: f32 = 15.;
-const JUMP_FORCE: f32 = -3.5;
-const GRAVITY: f32 = 98.;
-const JUMP_BUFFER_TIME: f32 = 0.1;
-const COYOTE_TIME: f32 = 0.1;
-const GROUND_FRICTION: f32 = 0.85;
-const AIR_RESISTANCE: f32 = 0.95;
-const MAX_FALL_SPEED: f32 = 60.0;
-const GROUND_TOLERANCE: f32 = 0.1; // Small tolerance for ground collision
 
 impl Player {
-    pub fn new(x: f32, y: f32) -> Self {
-        Player {
-            pos: Vec2::new(x, y),
-            vel: Vec2::ZERO,
-            size: Vec2::new(10.0, 20.0),
-            collision_flags: CollisionFlags::NONE,
-            direction: Direction::Right,
+    pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
+        let polygon = Polygon::from_vertices(
+            (0., 0.),
+            Rect {
+                x,
+                y,
+                width,
+                height,
+            }
+            .vertices(),
+        );
+
+        Self {
+            polygon,
+            velocity: Vec2::ZERO,
+            size: Vec2::new(width, height),
+            is_grounded: false,
             jump_buffer: 0.0,
             coyote_time: 0.0,
-            is_jumping: false,
-            last_collision: None,
+            last_mtv: None,
         }
+    }
+
+    pub fn update(&mut self, terrain: &[Polygon], dt: f32) {
+        self.apply_gravity(dt);
+        self.apply_friction(dt);
+        self.move_and_collide(terrain, dt);
+        self.update_timers(dt);
     }
 
     pub fn set_movement(&mut self, move_left: bool, move_right: bool) {
-        let acceleration = if self.is_grounded() {
-            MOVE_SPEED
-        } else {
-            MOVE_SPEED * 0.75
-        };
-
+        let mut move_dir = 0.0;
         if move_left {
-            self.vel.x -= acceleration;
-            self.direction = Direction::Left;
-        } else if move_right {
-            self.vel.x += acceleration;
-            self.direction = Direction::Right;
-        } else if self.is_grounded() {
-            self.vel.x *= GROUND_FRICTION;
+            move_dir -= 1.0;
+        }
+        if move_right {
+            move_dir += 1.0;
         }
 
-        // Apply air resistance
-        if !self.is_grounded() {
-            self.vel.x *= AIR_RESISTANCE;
-        }
-
-        // Clamp horizontal velocity
-        self.vel.x = self.vel.x.clamp(-MOVE_SPEED * 2.0, MOVE_SPEED * 2.0);
+        let target_speed = move_dir * MOVE_SPEED;
+        self.velocity.x = self.velocity.x + (target_speed - self.velocity.x) * 0.2;
     }
 
     pub fn jump(&mut self) {
-        if self.is_grounded() || self.coyote_time > 0.0 {
-            self.vel.y = JUMP_FORCE;
-            self.is_jumping = true;
+        if self.is_grounded || self.coyote_time > 0.0 {
+            self.velocity.y = JUMP_FORCE;
+            self.is_grounded = false;
             self.coyote_time = 0.0;
         } else {
-            self.jump_buffer = JUMP_BUFFER_TIME;
-        }
-    }
-
-    pub fn release_jump(&mut self) {
-        if self.is_jumping && self.vel.y < 0.0 {
-            self.vel.y *= 0.5;
-        }
-        self.is_jumping = false;
-    }
-
-    fn get_collision_bounds(&self) -> Rect {
-        Rect {
-            x: self.pos.x,
-            y: self.pos.y,
-            width: self.size.x,
-            height: self.size.y,
-        }
-    }
-
-    pub fn is_grounded(&self) -> bool {
-        self.collision_flags.intersects(
-            CollisionFlags::BOTTOM_WALL | CollisionFlags::LEFT_SLOPE | CollisionFlags::RIGHT_SLOPE,
-        )
-    }
-
-    fn move_vertical(&mut self, tilemap: &TileMap, dt: f32) {
-        let move_amount = self.vel.y * dt;
-        let new_y = self.pos.y + move_amount;
-
-        let (start_y, end_y) = if move_amount > 0.0 {
-            (self.pos.y, new_y + self.size.y)
-        } else {
-            (new_y, self.pos.y + self.size.y)
-        };
-
-        let start_tile_x = (self.pos.x / TILE_SIZE).floor() as i32;
-        let end_tile_x = ((self.pos.x + self.size.x - 1.0) / TILE_SIZE).floor() as i32;
-        let start_tile_y = (start_y / TILE_SIZE).floor() as i32;
-        let end_tile_y = (end_y / TILE_SIZE).ceil() as i32;
-
-        self.collision_flags.remove(
-            CollisionFlags::BOTTOM_WALL | CollisionFlags::LEFT_SLOPE | CollisionFlags::RIGHT_SLOPE,
-        );
-
-        for tile_y in start_tile_y..=end_tile_y {
-            for tile_x in start_tile_x..=end_tile_x {
-                if let Some(collision) = self.check_collision(tilemap, tile_x, tile_y) {
-                    match collision {
-                        CollisionType::Solid => {
-                            if move_amount > 0.0 {
-                                self.pos.y =
-                                    tile_y as f32 * TILE_SIZE - self.size.y - GROUND_TOLERANCE;
-                                self.collision_flags.insert(CollisionFlags::BOTTOM_WALL);
-                            } else {
-                                self.pos.y = (tile_y as f32 + 1.0) * TILE_SIZE;
-                                self.collision_flags.insert(CollisionFlags::TOP_WALL);
-                            }
-                            self.vel.y = 0.0;
-                            return;
-                        }
-                        CollisionType::Slope(slope_type) => {
-                            if self.adjust_to_slope(tile_x, tile_y, slope_type) {
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        self.pos.y = new_y;
-    }
-
-    fn adjust_to_slope(&mut self, tile_x: i32, tile_y: i32, slope_type: SlopeType) -> bool {
-        let tile_pos = Vec2::new(tile_x as f32 * TILE_SIZE, tile_y as f32 * TILE_SIZE);
-        let player_bottom = self.pos.y + self.size.y;
-        let slope_y = match slope_type {
-            SlopeType::RightUp => tile_pos.y + TILE_SIZE - (self.pos.x + self.size.x - tile_pos.x),
-            SlopeType::LeftUp => tile_pos.y + (self.pos.x - tile_pos.x),
-        };
-
-        if player_bottom > slope_y {
-            self.pos.y = slope_y - self.size.y;
-            self.vel.y = 0.0;
-            self.collision_flags.insert(match slope_type {
-                SlopeType::RightUp => CollisionFlags::RIGHT_SLOPE,
-                SlopeType::LeftUp => CollisionFlags::LEFT_SLOPE,
-            });
-            true
-        } else {
-            false
-        }
-    }
-
-    fn move_horizontal(&mut self, tilemap: &TileMap, dt: f32) {
-        let move_amount = self.vel.x * dt;
-        let new_x = self.pos.x + move_amount;
-
-        let (start_x, end_x) = if move_amount > 0.0 {
-            (self.pos.x, new_x + self.size.x)
-        } else {
-            (new_x, self.pos.x + self.size.x)
-        };
-
-        let start_tile_x = (start_x / TILE_SIZE).floor() as i32;
-        let end_tile_x = (end_x / TILE_SIZE).ceil() as i32;
-        let start_tile_y = (self.pos.y / TILE_SIZE).floor() as i32;
-        let end_tile_y = ((self.pos.y + self.size.y - 1.0) / TILE_SIZE).floor() as i32;
-
-        self.collision_flags
-            .remove(CollisionFlags::LEFT_WALL | CollisionFlags::RIGHT_WALL);
-
-        for tile_x in start_tile_x..=end_tile_x {
-            for tile_y in start_tile_y..=end_tile_y {
-                if let Some(collision) = self.check_collision(tilemap, tile_x, tile_y) {
-                    match collision {
-                        CollisionType::Solid => {
-                            if move_amount > 0.0 {
-                                self.pos.x = tile_x as f32 * TILE_SIZE - self.size.x;
-                                self.collision_flags.insert(CollisionFlags::RIGHT_WALL);
-                            } else if move_amount < 0.0 {
-                                self.pos.x = (tile_x as f32 + 1.0) * TILE_SIZE;
-                                self.collision_flags.insert(CollisionFlags::LEFT_WALL);
-                            }
-                            self.vel.x = 0.0;
-                            return;
-                        }
-                        CollisionType::Slope(_) => {
-                            // Slopes are handled in vertical movement
-                        }
-                    }
-                }
-            }
-        }
-
-        // Only update position if no collision occurred
-        self.pos.x = new_x;
-    }
-
-    pub fn update(&mut self, tilemap: &TileMap, dt: f32) {
-        if !self.is_grounded() {
-            self.apply_gravity(dt);
-        } else {
-            self.vel.y = 0.0;
-        }
-
-        // Apply friction before movement
-        if self.is_grounded() {
-            self.vel.x *= 0.9; // Adjust friction coefficient as needed
-        }
-
-        self.move_horizontal(tilemap, dt);
-        self.move_vertical(tilemap, dt);
-
-        // Ensure velocity is zeroed if very small to prevent drift
-        if self.vel.x.abs() < 0.01 {
-            self.vel.x = 0.0;
-        }
-        if self.vel.y.abs() < 0.01 {
-            self.vel.y = 0.0;
-        }
-    }
-
-    fn check_collision(&self, tilemap: &TileMap, x: i32, y: i32) -> Option<CollisionType> {
-        if x < 0 || y < 0 || x >= tilemap.width as i32 || y >= tilemap.height as i32 {
-            return None;
-        }
-
-        let tile_world_pos = Vec2::new(x as f32 * TILE_SIZE, y as f32 * TILE_SIZE);
-        let tile_rect = Rect {
-            x: tile_world_pos.x,
-            y: tile_world_pos.y,
-            width: TILE_SIZE,
-            height: TILE_SIZE,
-        };
-
-        if self.get_collision_bounds().overlaps(&tile_rect) {
-            match tilemap.get_tile(x as usize, y as usize) {
-                TileType::Solid => Some(CollisionType::Solid),
-                TileType::Slope(slope_type) => Some(CollisionType::Slope(slope_type)),
-                _ => None,
-            }
-        } else {
-            None
+            self.jump_buffer = 0.1; // Set jump buffer for 100ms
         }
     }
 
     fn apply_gravity(&mut self, dt: f32) {
-        self.vel.y += GRAVITY * dt;
-        self.vel.y = self.vel.y.min(MAX_FALL_SPEED);
+        self.velocity.y += GRAVITY * dt;
+        self.velocity.y = self.velocity.y.min(MAX_FALL_SPEED);
     }
-}
 
-impl Player {
-    pub fn debug_render(&self, draw: &mut Draw, tilemap: &TileMap) {
-        // Player collision bounds
-        let bounds = self.get_collision_bounds();
-        draw.rect((bounds.x, bounds.y), (bounds.width, bounds.height))
-            .color(Color::GREEN)
-            .stroke(2.0);
+    fn apply_friction(&mut self, dt: f32) {
+        if self.is_grounded {
+            self.velocity.x *= GROUND_FRICTION.powf(dt * 60.0);
+        } else {
+            self.velocity.x *= AIR_RESISTANCE.powf(dt * 60.0);
+        }
+    }
 
-        // Checked tiles
-        let (start_tile_x, start_tile_y) = (
-            (bounds.x / TILE_SIZE).floor() as i32,
-            (bounds.y / TILE_SIZE).floor() as i32,
-        );
-        let (end_tile_x, end_tile_y) = (
-            ((bounds.x + bounds.width) / TILE_SIZE).ceil() as i32,
-            ((bounds.y + bounds.height) / TILE_SIZE).ceil() as i32,
-        );
+    fn move_and_collide(&mut self, terrain: &[Polygon], dt: f32) {
+        let original_position = self.polygon.position.to_vec2();
+        let mut new_position = original_position;
 
-        for tile_y in start_tile_y..end_tile_y {
-            for tile_x in start_tile_x..end_tile_x {
-                draw.rect(
-                    (tile_x as f32 * TILE_SIZE, tile_y as f32 * TILE_SIZE),
-                    (TILE_SIZE, TILE_SIZE),
-                )
-                .color(Color::RED)
-                .stroke(1.0);
+        self.is_grounded = false;
+        self.last_mtv = None;
+
+        // Apply movement in X axis
+        new_position.x += self.velocity.x * dt;
+        self.polygon.position = new_position.to_tuple();
+
+        for terrain_poly in terrain {
+            let mtv = sat_collision(&self.polygon, terrain_poly);
+            if mtv.0 != 0.0 || mtv.1 != 0.0 {
+                new_position.x += mtv.0;
+                // self.polygon.position = new_position.to_tuple();
+                self.last_mtv = Some(mtv);
+
+                // Resolve velocity in X axis
+                if (mtv.0 > 0.0 && self.velocity.x < 0.0) || (mtv.0 < 0.0 && self.velocity.x > 0.0)
+                {
+                    self.velocity.x = 0.0;
+                }
             }
         }
 
-        // // Collision flags
-        // let mut flag_text = String::new();
-        // if self.collision_flags.contains(CollisionFlags::LEFT_WALL) {
-        //     flag_text += "L ";
-        // }
-        // if self.collision_flags.contains(CollisionFlags::RIGHT_WALL) {
-        //     flag_text += "R ";
-        // }
-        // if self.collision_flags.contains(CollisionFlags::TOP_WALL) {
-        //     flag_text += "T ";
-        // }
-        // if self.collision_flags.contains(CollisionFlags::BOTTOM_WALL) {
-        //     flag_text += "B ";
-        // }
-        // if self.collision_flags.contains(CollisionFlags::LEFT_SLOPE) {
-        //     flag_text += "SL ";
-        // }
-        // if self.collision_flags.contains(CollisionFlags::RIGHT_SLOPE) {
-        //     flag_text += "SR ";
-        // }
-        // draw.text(&state.font, &flag_text)
-        //     .position(self.pos.x, self.pos.y - 20.0)
-        //     .size(20.0)
-        //     .color(Color::WHITE);
+        // Apply movement in Y axis
+        new_position.y += self.velocity.y * dt;
+        self.polygon.position = new_position.to_tuple();
 
-        // Velocity
-        draw.line(
-            (
-                self.pos.x + self.size.x / 2.0,
-                self.pos.y + self.size.y / 2.0,
-            ),
-            (
-                self.pos.x + self.size.x / 2.0 + self.vel.x * 10.0,
-                self.pos.y + self.size.y / 2.0 + self.vel.y * 10.0,
-            ),
-        )
-        .color(Color::BLUE)
-        .width(2.0);
+        for terrain_poly in terrain {
+            let mtv = sat_collision(&self.polygon, terrain_poly);
+            if mtv.0 != 0.0 || mtv.1 != 0.0 {
+                new_position.y += mtv.1;
+                self.polygon.position = new_position.to_tuple();
+                self.last_mtv = Some(mtv);
 
-        // // Enhanced debug info
-        // let debug_info = format!(
-        //         "Pos: ({:.2}, {:.2})\nVel: ({:.2}, {:.2})\nGrounded: {}\nCollision Flags: {:?}\nLast Collision: {:?}",
-        //         self.pos.x, self.pos.y,
-        //         self.vel.x, self.vel.y,
-        //         self.is_grounded(),
-        //         self.collision_flags,
-        //         self.last_collision
-        //     );
-        // draw.text(&debug_info)
-        //     .position(10.0, 80.0)
-        //     .size(20.0)
-        //     .color(Color::WHITE);
-
-        // Horizontal movement visualization
-        let move_end = self.pos + self.vel;
-        draw.line(
-            (
-                self.pos.x + self.size.x / 2.0,
-                self.pos.y + self.size.y / 2.0,
-            ),
-            (
-                move_end.x + self.size.x / 2.0,
-                move_end.y + self.size.y / 2.0,
-            ),
-        )
-        .color(Color::YELLOW)
-        .width(2.0);
-
-        // Collision points
-        for tile_y in
-            (self.pos.y / TILE_SIZE) as i32..=((self.pos.y + self.size.y) / TILE_SIZE) as i32
-        {
-            for tile_x in
-                (self.pos.x / TILE_SIZE) as i32..=((self.pos.x + self.size.x) / TILE_SIZE) as i32
-            {
-                if let Some(collision) = self.check_collision(tilemap, tile_x, tile_y) {
-                    let color = match collision {
-                        CollisionType::Solid => Color::RED,
-                        CollisionType::Slope(_) => Color::GREEN,
-                    };
-                    draw.circle(3.0)
-                        .position(tile_x as f32 * TILE_SIZE, tile_y as f32 * TILE_SIZE)
-                        .color(color);
+                // Resolve velocity in Y axis
+                if mtv.1 < 0.0 {
+                    self.is_grounded = true;
+                    if self.velocity.y > 0.0 {
+                        self.velocity.y = 0.0;
+                    }
+                } else if mtv.1 > 0.0 && self.velocity.y < 0.0 {
+                    self.velocity.y = 0.0;
                 }
             }
+        }
+
+        // Update position
+        self.polygon.position = new_position.to_tuple();
+
+        // Handle jump buffer
+        if self.jump_buffer > 0.0 && self.is_grounded {
+            self.velocity.y = JUMP_FORCE;
+            self.is_grounded = false;
+            self.jump_buffer = 0.0;
+        }
+
+        // Debug prints
+        println!("Final position: {:?}", new_position);
+        println!("Final velocity: {:?}", self.velocity);
+    }
+
+    fn update_timers(&mut self, dt: f32) {
+        if !self.is_grounded {
+            self.coyote_time = (self.coyote_time - dt).max(0.0);
+        } else {
+            self.coyote_time = 0.1; // Reset coyote time when grounded
+        }
+
+        self.jump_buffer = (self.jump_buffer - dt).max(0.0);
+    }
+
+    pub fn render(&self, draw: &mut Draw) {
+        // Draw player polygon
+        let mut path = draw.path();
+
+        path.move_to(
+            self.polygon.vertices[0].0 + self.position().x,
+            self.polygon.vertices[0].1 + self.position().y,
+        );
+        for vertex in self.polygon.vertices.iter().skip(1) {
+            path.line_to(vertex.0 + self.position().x, vertex.1 + self.position().y);
+        }
+        path.close();
+        path.color(Color::BLUE).fill();
+    }
+
+    pub fn position(&self) -> Vec2 {
+        self.polygon.position.to_vec2()
+    }
+
+    pub fn debug_render(&self, draw: &mut Draw, font: &Font) {
+        // Draw velocity vector
+        let center = self.polygon.position.to_vec2() + self.size / 2.0;
+        let vel_end = center + self.velocity / 5.0; // Scale down for visibility
+        draw.line((center.x, center.y), (vel_end.x, vel_end.y))
+            .color(Color::RED);
+
+        // Draw grounded indicator
+        let grounded_text = if self.is_grounded {
+            "Grounded"
+        } else {
+            "In Air"
+        };
+        draw.text(font, grounded_text)
+            .position(center.x, self.polygon.position.1 - 20.0)
+            .size(16.0)
+            .color(Color::WHITE);
+
+        // Draw jump buffer and coyote time indicators
+        let debug_text = format!(
+            "Jump Buffer: {:.2}\nCoyote Time: {:.2}\nVelocity: ({:.2}, {:.2})",
+            self.jump_buffer, self.coyote_time, self.velocity.x, self.velocity.y
+        );
+        draw.text(font, &debug_text)
+            .position(10.0, 10.0)
+            .size(16.0)
+            .color(Color::WHITE);
+
+        // Draw MTV
+        if let Some(mtv) = self.last_mtv {
+            let mtv_end = center + mtv.to_vec2() * 100.0; // Scale up for visibility
+            draw.line((center.x, center.y), (mtv_end.x, mtv_end.y))
+                .width(2.0)
+                .color(Color::BLUE);
+
+            let mtv_text = format!("MTV: ({:.2}, {:.2})", mtv.0, mtv.1);
+            draw.text(font, &mtv_text)
+                .position(10.0, 50.0)
+                .size(16.0)
+                .color(Color::WHITE);
+        }
+
+        // Add vertex order visualization
+        for (i, vertex) in self.polygon.vertices.iter().enumerate() {
+            let pos = self.polygon.position.to_vec2() + vertex.to_vec2();
+            draw.circle(3.0)
+                .position(pos.x, pos.y)
+                .color(Color::RED)
+                .fill();
+            draw.text(font, &i.to_string())
+                .position(pos.x + 5.0, pos.y + 5.0)
+                .size(12.0)
+                .color(Color::WHITE);
         }
     }
 }
