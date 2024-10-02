@@ -1,4 +1,4 @@
-use crate::player::Player;
+use notan::math::Vec2;
 
 pub const TILE_SIZE: f32 = 16.0;
 
@@ -49,9 +49,5 @@ impl TileMap {
         let tile_x = (x / TILE_SIZE) as usize;
         let tile_y = (y / TILE_SIZE) as usize;
         self.get_tile(tile_x, tile_y)
-    }
-
-    pub fn is_solid(&self, x: f32, y: f32) -> bool {
-        matches!(self.get_tile_worldspace(x, y), TileType::Solid)
     }
 }

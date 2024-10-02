@@ -1,6 +1,8 @@
 use crate::tilemap::{SlopeType, TileMap, TileType, TILE_SIZE};
 use bitflags::bitflags;
-use macroquad::prelude::*;
+use notan::draw::*;
+use notan::math::{Rect, Vec2};
+use notan::prelude::*;
 
 bitflags! {
     pub struct CollisionFlags: u16 {
@@ -39,6 +41,19 @@ pub enum Direction {
     Right,
 }
 
+trait Overlaps {
+    fn overlaps(&self, other: &Rect) -> bool;
+}
+
+impl Overlaps for Rect {
+    fn overlaps(&self, other: &Rect) -> bool {
+        self.x < other.x + other.width
+            && self.x + self.width > other.x
+            && self.y < other.y + other.height
+            && self.y + self.height > other.y
+    }
+}
+
 const MOVE_SPEED: f32 = 15.;
 const JUMP_FORCE: f32 = -3.5;
 const GRAVITY: f32 = 98.;
@@ -52,9 +67,9 @@ const GROUND_TOLERANCE: f32 = 0.1; // Small tolerance for ground collision
 impl Player {
     pub fn new(x: f32, y: f32) -> Self {
         Player {
-            pos: vec2(x, y),
-            vel: vec2(0.0, 0.0),
-            size: vec2(10.0, 20.0),
+            pos: Vec2::new(x, y),
+            vel: Vec2::ZERO,
+            size: Vec2::new(10.0, 20.0),
             collision_flags: CollisionFlags::NONE,
             direction: Direction::Right,
             jump_buffer: 0.0,
@@ -108,7 +123,12 @@ impl Player {
     }
 
     fn get_collision_bounds(&self) -> Rect {
-        Rect::new(self.pos.x, self.pos.y, self.size.x, self.size.y)
+        Rect {
+            x: self.pos.x,
+            y: self.pos.y,
+            width: self.size.x,
+            height: self.size.y,
+        }
     }
 
     pub fn is_grounded(&self) -> bool {
@@ -261,7 +281,12 @@ impl Player {
         }
 
         let tile_world_pos = Vec2::new(x as f32 * TILE_SIZE, y as f32 * TILE_SIZE);
-        let tile_rect = Rect::new(tile_world_pos.x, tile_world_pos.y, TILE_SIZE, TILE_SIZE);
+        let tile_rect = Rect {
+            x: tile_world_pos.x,
+            y: tile_world_pos.y,
+            width: TILE_SIZE,
+            height: TILE_SIZE,
+        };
 
         if self.get_collision_bounds().overlaps(&tile_rect) {
             match tilemap.get_tile(x as usize, y as usize) {
@@ -281,10 +306,12 @@ impl Player {
 }
 
 impl Player {
-    pub fn debug_render(&self, tilemap: &TileMap) {
+    pub fn debug_render(&self, draw: &mut Draw, tilemap: &TileMap) {
         // Player collision bounds
         let bounds = self.get_collision_bounds();
-        draw_rectangle_lines(bounds.x, bounds.y, bounds.w, bounds.h, 2.0, GREEN);
+        draw.rect((bounds.x, bounds.y), (bounds.width, bounds.height))
+            .color(Color::GREEN)
+            .stroke(2.0);
 
         // Checked tiles
         let (start_tile_x, start_tile_y) = (
@@ -292,76 +319,88 @@ impl Player {
             (bounds.y / TILE_SIZE).floor() as i32,
         );
         let (end_tile_x, end_tile_y) = (
-            ((bounds.x + bounds.w) / TILE_SIZE).ceil() as i32,
-            ((bounds.y + bounds.h) / TILE_SIZE).ceil() as i32,
+            ((bounds.x + bounds.width) / TILE_SIZE).ceil() as i32,
+            ((bounds.y + bounds.height) / TILE_SIZE).ceil() as i32,
         );
 
         for tile_y in start_tile_y..end_tile_y {
             for tile_x in start_tile_x..end_tile_x {
-                draw_rectangle_lines(
-                    tile_x as f32 * TILE_SIZE,
-                    tile_y as f32 * TILE_SIZE,
-                    TILE_SIZE,
-                    TILE_SIZE,
-                    1.0,
-                    RED,
-                );
+                draw.rect(
+                    (tile_x as f32 * TILE_SIZE, tile_y as f32 * TILE_SIZE),
+                    (TILE_SIZE, TILE_SIZE),
+                )
+                .color(Color::RED)
+                .stroke(1.0);
             }
         }
 
-        // Collision flags
-        let mut flag_text = String::new();
-        if self.collision_flags.contains(CollisionFlags::LEFT_WALL) {
-            flag_text += "L ";
-        }
-        if self.collision_flags.contains(CollisionFlags::RIGHT_WALL) {
-            flag_text += "R ";
-        }
-        if self.collision_flags.contains(CollisionFlags::TOP_WALL) {
-            flag_text += "T ";
-        }
-        if self.collision_flags.contains(CollisionFlags::BOTTOM_WALL) {
-            flag_text += "B ";
-        }
-        if self.collision_flags.contains(CollisionFlags::LEFT_SLOPE) {
-            flag_text += "SL ";
-        }
-        if self.collision_flags.contains(CollisionFlags::RIGHT_SLOPE) {
-            flag_text += "SR ";
-        }
-        draw_text(&flag_text, self.pos.x, self.pos.y - 20.0, 20.0, WHITE);
+        // // Collision flags
+        // let mut flag_text = String::new();
+        // if self.collision_flags.contains(CollisionFlags::LEFT_WALL) {
+        //     flag_text += "L ";
+        // }
+        // if self.collision_flags.contains(CollisionFlags::RIGHT_WALL) {
+        //     flag_text += "R ";
+        // }
+        // if self.collision_flags.contains(CollisionFlags::TOP_WALL) {
+        //     flag_text += "T ";
+        // }
+        // if self.collision_flags.contains(CollisionFlags::BOTTOM_WALL) {
+        //     flag_text += "B ";
+        // }
+        // if self.collision_flags.contains(CollisionFlags::LEFT_SLOPE) {
+        //     flag_text += "SL ";
+        // }
+        // if self.collision_flags.contains(CollisionFlags::RIGHT_SLOPE) {
+        //     flag_text += "SR ";
+        // }
+        // draw.text(&state.font, &flag_text)
+        //     .position(self.pos.x, self.pos.y - 20.0)
+        //     .size(20.0)
+        //     .color(Color::WHITE);
 
         // Velocity
-        draw_line(
-            self.pos.x + self.size.x / 2.0,
-            self.pos.y + self.size.y / 2.0,
-            self.pos.x + self.size.x / 2.0 + self.vel.x * 10.0,
-            self.pos.y + self.size.y / 2.0 + self.vel.y * 10.0,
-            2.0,
-            BLUE,
-        );
+        draw.line(
+            (
+                self.pos.x + self.size.x / 2.0,
+                self.pos.y + self.size.y / 2.0,
+            ),
+            (
+                self.pos.x + self.size.x / 2.0 + self.vel.x * 10.0,
+                self.pos.y + self.size.y / 2.0 + self.vel.y * 10.0,
+            ),
+        )
+        .color(Color::BLUE)
+        .width(2.0);
 
-        // Enhanced debug info
-        let debug_info = format!(
-                    "Pos: ({:.2}, {:.2})\nVel: ({:.2}, {:.2})\nGrounded: {}\nCollision Flags: {:?}\nLast Collision: {:?}",
-                    self.pos.x, self.pos.y,
-                    self.vel.x, self.vel.y,
-                    self.is_grounded(),
-                    self.collision_flags,
-                    self.last_collision
-                );
-        draw_text(&debug_info, 10.0, 80.0, 20.0, WHITE);
+        // // Enhanced debug info
+        // let debug_info = format!(
+        //         "Pos: ({:.2}, {:.2})\nVel: ({:.2}, {:.2})\nGrounded: {}\nCollision Flags: {:?}\nLast Collision: {:?}",
+        //         self.pos.x, self.pos.y,
+        //         self.vel.x, self.vel.y,
+        //         self.is_grounded(),
+        //         self.collision_flags,
+        //         self.last_collision
+        //     );
+        // draw.text(&debug_info)
+        //     .position(10.0, 80.0)
+        //     .size(20.0)
+        //     .color(Color::WHITE);
 
         // Horizontal movement visualization
         let move_end = self.pos + self.vel;
-        draw_line(
-            self.pos.x + self.size.x / 2.0,
-            self.pos.y + self.size.y / 2.0,
-            move_end.x + self.size.x / 2.0,
-            move_end.y + self.size.y / 2.0,
-            2.0,
-            YELLOW,
-        );
+        draw.line(
+            (
+                self.pos.x + self.size.x / 2.0,
+                self.pos.y + self.size.y / 2.0,
+            ),
+            (
+                move_end.x + self.size.x / 2.0,
+                move_end.y + self.size.y / 2.0,
+            ),
+        )
+        .color(Color::YELLOW)
+        .width(2.0);
 
         // Collision points
         for tile_y in
@@ -372,15 +411,12 @@ impl Player {
             {
                 if let Some(collision) = self.check_collision(tilemap, tile_x, tile_y) {
                     let color = match collision {
-                        CollisionType::Solid => RED,
-                        CollisionType::Slope(_) => GREEN,
+                        CollisionType::Solid => Color::RED,
+                        CollisionType::Slope(_) => Color::GREEN,
                     };
-                    draw_circle(
-                        tile_x as f32 * TILE_SIZE,
-                        tile_y as f32 * TILE_SIZE,
-                        3.0,
-                        color,
-                    );
+                    draw.circle(3.0)
+                        .position(tile_x as f32 * TILE_SIZE, tile_y as f32 * TILE_SIZE)
+                        .color(color);
                 }
             }
         }
