@@ -1,13 +1,6 @@
 use notan::draw::*;
-use notan::math::{Rect, Vec2};
 use notan::prelude::*;
-
-use sepax2d::aabb::AABB;
-use sepax2d::capsule::Capsule;
-use sepax2d::circle::Circle;
-use sepax2d::polygon::Polygon;
-
-use crate::vertices::{ToTuple, ToVec2, Vertices};
+use rapier2d::prelude::*;
 
 pub const TILE_SIZE: f32 = 16.0;
 
@@ -54,71 +47,65 @@ impl TileMap {
         }
     }
 
-    pub fn get_tile_worldspace(&self, x: f32, y: f32) -> TileType {
-        let tile_x = (x / TILE_SIZE) as usize;
-        let tile_y = (y / TILE_SIZE) as usize;
-        self.get_tile(tile_x, tile_y)
-    }
-
-    pub fn collision_mask(&self) -> Vec<Polygon> {
-        let mut polygons = Vec::new();
+    pub fn add_colliders(&self, colliders: &mut ColliderSet) {
         for y in 0..self.height {
             for x in 0..self.width {
+                let position = vector![x as f32 * TILE_SIZE, y as f32 * TILE_SIZE];
                 match self.get_tile(x, y) {
                     TileType::Solid => {
-                        let pos = (x as f32 * TILE_SIZE, y as f32 * TILE_SIZE);
-
-                        polygons.push(Polygon::from_vertices(
-                            (0., 0.),
-                            Rect {
-                                x: pos.0,
-                                y: pos.1,
-                                width: TILE_SIZE,
-                                height: TILE_SIZE,
-                            }
-                            .vertices(),
-                        ));
+                        let collider = ColliderBuilder::cuboid(TILE_SIZE / 2.0, TILE_SIZE / 2.0)
+                            .translation(position + vector![TILE_SIZE / 2.0, TILE_SIZE / 2.0])
+                            .build();
+                        colliders.insert(collider);
                     }
                     TileType::Slope(slope_type) => {
-                        let pos = (x as f32 * TILE_SIZE, y as f32 * TILE_SIZE);
                         let vertices = match slope_type {
-                            SlopeType::LeftUp => {
-                                vec![
-                                    (pos.0, pos.1 + TILE_SIZE),
-                                    (pos.0 + TILE_SIZE, pos.1 + TILE_SIZE),
-                                    (pos.0 + TILE_SIZE, pos.1),
-                                ]
-                            }
-                            SlopeType::RightUp => {
-                                vec![
-                                    (pos.0, pos.1 + TILE_SIZE),
-                                    (pos.0 + TILE_SIZE, pos.1 + TILE_SIZE),
-                                    (pos.0, pos.1),
-                                ]
-                            }
+                            SlopeType::LeftUp => vec![
+                                point![0.0, TILE_SIZE],
+                                point![TILE_SIZE, 0.0],
+                                point![TILE_SIZE, TILE_SIZE],
+                            ],
+                            SlopeType::RightUp => vec![
+                                point![0.0, 0.0],
+                                point![TILE_SIZE, TILE_SIZE],
+                                point![0.0, TILE_SIZE],
+                            ],
                         };
-                        polygons.push(Polygon::from_vertices((0., 0.), vertices));
+                        let collider = ColliderBuilder::polyline(vertices, None)
+                            .translation(position)
+                            .build();
+                        colliders.insert(collider);
                     }
                     TileType::Empty => {}
                 }
             }
         }
-        polygons
     }
 
     pub fn debug_render(&self, draw: &mut Draw, font: &Font) {
-        for polygon in self.collision_mask() {
-            let mut path = draw.path();
-
-            path.move_to(
-                polygon.vertices[0].0 + polygon.position.0,
-                polygon.vertices[0].1 + polygon.position.1,
-            );
-            for vertex in polygon.vertices.iter().skip(1) {
-                path.line_to(vertex.0 + polygon.position.0, vertex.1 + polygon.position.1);
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let pos = (x as f32 * TILE_SIZE, y as f32 * TILE_SIZE);
+                match self.get_tile(x, y) {
+                    TileType::Solid => {
+                        draw.rect(pos, (TILE_SIZE, TILE_SIZE))
+                            .color(Color::from_rgb(0.0, 1.0, 0.0))
+                            .stroke(1.0);
+                    }
+                    TileType::Slope(slope_type) => {
+                        let mut path = draw.path();
+                        path.move_to(pos.0, pos.1 + TILE_SIZE);
+                        path.line_to(pos.0 + TILE_SIZE, pos.1 + TILE_SIZE);
+                        match slope_type {
+                            SlopeType::LeftUp => path.line_to(pos.0 + TILE_SIZE, pos.1),
+                            SlopeType::RightUp => path.line_to(pos.0, pos.1),
+                        };
+                        path.close();
+                        path.stroke(1.0).color(Color::from_rgb(1.0, 1.0, 0.0));
+                    }
+                    TileType::Empty => {}
+                }
             }
-            path.close();
-            path.color(Color::from_rgb(0.0, 1.0, 0.0)).fill();
         }
     }
 }

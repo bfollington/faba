@@ -1,65 +1,122 @@
 use notan::draw::*;
-use notan::math::{Rect, Vec2};
+use notan::math::Vec2;
 use notan::prelude::*;
+use rapier2d::prelude::*;
 
-use sepax2d::aabb::AABB;
-use sepax2d::capsule::Capsule;
-use sepax2d::circle::Circle;
-use sepax2d::polygon::Polygon;
-use sepax2d::sat_collision;
-
-use crate::vertices::{ToTuple, ToVec2, Vertices};
-
-const MOVE_SPEED: f32 = 200.0;
-const JUMP_FORCE: f32 = -300.0;
-const GRAVITY: f32 = 980.0;
-const MAX_FALL_SPEED: f32 = 500.0;
-const GROUND_FRICTION: f32 = 0.9;
-const AIR_RESISTANCE: f32 = 0.99;
-const SLOPE_TOLERANCE: f32 = 0.7; // Cosine of maximum slope angle
+const MOVE_SPEED: f32 = 50.0;
+const JUMP_FORCE: f32 = -150.0;
 
 pub struct Player {
-    pub polygon: Polygon,
-    pub velocity: Vec2,
+    pub body_handle: RigidBodyHandle,
+    pub collider_handle: ColliderHandle,
     pub size: Vec2,
     pub is_grounded: bool,
     pub jump_buffer: f32,
     pub coyote_time: f32,
-    pub last_mtv: Option<(f32, f32)>,
 }
 
 impl Player {
-    pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        let polygon = Polygon::from_vertices(
-            (0., 0.),
-            Rect {
-                x,
-                y,
-                width,
-                height,
-            }
-            .vertices(),
-        );
+    pub fn new(
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        bodies: &mut RigidBodySet,
+        colliders: &mut ColliderSet,
+    ) -> Self {
+        let rigid_body = RigidBodyBuilder::dynamic()
+            .translation(vector![x, y])
+            .lock_rotations()
+            .build();
+        let body_handle = bodies.insert(rigid_body);
+        let radius = width / 2.0;
+        let half_height = (height - width) / 2.0;
+        let collider = ColliderBuilder::capsule_y(half_height, radius)
+            .friction(0.0)
+            .build();
+        let collider_handle = colliders.insert_with_parent(collider, body_handle, bodies);
 
         Self {
-            polygon,
-            velocity: Vec2::ZERO,
+            body_handle,
+            collider_handle,
             size: Vec2::new(width, height),
             is_grounded: false,
             jump_buffer: 0.0,
             coyote_time: 0.0,
-            last_mtv: None,
         }
     }
 
-    pub fn update(&mut self, terrain: &[Polygon], dt: f32) {
-        self.apply_gravity(dt);
-        self.apply_friction(dt);
-        self.move_and_collide(terrain, dt);
-        self.update_timers(dt);
+    pub fn update(
+        &mut self,
+        bodies: &RigidBodySet,
+        colliders: &ColliderSet,
+        query: &QueryPipeline,
+    ) {
+        if let Some(body) = bodies.get(self.body_handle) {
+            let velocity = body.linvel();
+            let position = body.translation();
+
+            let (rays, filter) = self.generate_ground_check_rays(position);
+            self.is_grounded = self.check_grounded(&rays, bodies, colliders, query, filter);
+        }
     }
 
-    pub fn set_movement(&mut self, move_left: bool, move_right: bool) {
+    fn generate_ground_check_rays(&self, position: &Vector<Real>) -> (Vec<Ray>, QueryFilter) {
+        let ray_pos = point![position.x, position.y + self.size.y / 2.0];
+        let ray_dir = vector![0.0, 1.0];
+        let ray_length = 2.0;
+        let filter = QueryFilter::default()
+            .exclude_rigid_body(self.body_handle)
+            .exclude_collider(self.collider_handle);
+
+        let ray_offsets = [-self.size.x / 3.0, 0.0, self.size.x / 3.0];
+        let rays = ray_offsets
+            .iter()
+            .map(|offset| Ray {
+                dir: ray_dir,
+                origin: point![ray_pos.x + offset, ray_pos.y],
+            })
+            .collect();
+
+        (rays, filter)
+    }
+
+    fn check_grounded(
+        &self,
+        rays: &[Ray],
+        bodies: &RigidBodySet,
+        colliders: &ColliderSet,
+        query: &QueryPipeline,
+        filter: QueryFilter,
+    ) -> bool {
+        for ray in rays {
+            if query
+                .cast_ray(bodies, colliders, ray, 2.0, true, filter)
+                .is_some()
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn debug_render_ground_check_rays(&self, draw: &mut Draw, bodies: &RigidBodySet) {
+        if let Some(body) = bodies.get(self.body_handle) {
+            let position = body.translation();
+            let (rays, _) = self.generate_ground_check_rays(position);
+
+            for ray in rays {
+                let start = (ray.origin.x, ray.origin.y);
+                let end = (
+                    ray.origin.x + ray.dir.x * 2.0,
+                    ray.origin.y + ray.dir.y * 2.0,
+                );
+                draw.line(start, end).color(Color::GREEN);
+            }
+        }
+    }
+
+    pub fn set_movement(&self, move_left: bool, move_right: bool, bodies: &mut RigidBodySet) {
         let mut move_dir = 0.0;
         if move_left {
             move_dir -= 1.0;
@@ -68,178 +125,87 @@ impl Player {
             move_dir += 1.0;
         }
 
-        let target_speed = move_dir * MOVE_SPEED;
-        self.velocity.x = self.velocity.x + (target_speed - self.velocity.x) * 0.2;
+        if let Some(body) = bodies.get_mut(self.body_handle) {
+            let mut velocity = *body.linvel();
+            velocity.x = move_dir * MOVE_SPEED;
+
+            // Apply slope adjustment
+            if self.is_grounded {
+                let slope_angle = velocity.y.atan2(velocity.x);
+                velocity.y = velocity.x * slope_angle.sin();
+            }
+
+            body.set_linvel(velocity, true);
+        }
     }
 
-    pub fn jump(&mut self) {
+    pub fn jump(&mut self, bodies: &mut RigidBodySet) {
         if self.is_grounded || self.coyote_time > 0.0 {
-            self.velocity.y = JUMP_FORCE;
-            self.is_grounded = false;
-            self.coyote_time = 0.0;
+            if let Some(body) = bodies.get_mut(self.body_handle) {
+                let mut velocity = *body.linvel();
+                velocity.y = JUMP_FORCE;
+                body.set_linvel(velocity, true);
+            }
         } else {
             self.jump_buffer = 0.1; // Set jump buffer for 100ms
         }
     }
 
-    fn apply_gravity(&mut self, dt: f32) {
-        self.velocity.y += GRAVITY * dt;
-        self.velocity.y = self.velocity.y.min(MAX_FALL_SPEED);
-    }
-
-    fn apply_friction(&mut self, dt: f32) {
-        if self.is_grounded {
-            self.velocity.x *= GROUND_FRICTION.powf(dt * 60.0);
+    pub fn position(&self, bodies: &RigidBodySet) -> Vec2 {
+        if let Some(body) = bodies.get(self.body_handle) {
+            let position = body.translation();
+            Vec2::new(position.x, position.y)
         } else {
-            self.velocity.x *= AIR_RESISTANCE.powf(dt * 60.0);
+            Vec2::ZERO
         }
     }
 
-    fn move_and_collide(&mut self, terrain: &[Polygon], dt: f32) {
-        let movement = self.velocity * dt;
-        let original_position = self.polygon.position.to_vec2();
-        let mut new_position = original_position + movement;
-
-        self.is_grounded = false;
-        self.last_mtv = None;
-
-        let mut largest_mtv = (0.0, 0.0);
-        let mut largest_mtv_magnitude = 0.0;
-
-        for terrain_poly in terrain {
-            self.polygon.position = new_position.to_tuple();
-            let mtv = sat_collision(&self.polygon, terrain_poly);
-            let mtv_magnitude = (mtv.0 * mtv.0 + mtv.1 * mtv.1).sqrt();
-
-            if mtv_magnitude > largest_mtv_magnitude {
-                largest_mtv = mtv;
-                largest_mtv_magnitude = mtv_magnitude;
-            }
-        }
-
-        if largest_mtv_magnitude > 0.0 {
-            // Debug print
-            println!("Collision detected:");
-            println!("  Player position: {:?}", new_position);
-            println!("  Player velocity: {:?}", self.velocity);
-            println!("  MTV: {:?}", largest_mtv);
-
-            new_position += largest_mtv.to_vec2();
-            self.last_mtv = Some(largest_mtv);
-
-            // Resolve velocity
-            let normal = largest_mtv.to_vec2().normalize();
-            let dot_product = self.velocity.dot(normal);
-            if dot_product < 0.0 {
-                self.velocity -= normal * dot_product;
-            }
-
-            // Check if grounded (including slopes)
-            if normal.y < -SLOPE_TOLERANCE {
-                self.is_grounded = true;
-                if self.velocity.y > 0.0 {
-                    self.velocity.y = 0.0;
-                }
-            }
-
-            // Debug print after resolution
-            println!("  New position: {:?}", new_position);
-            println!("  New velocity: {:?}", self.velocity);
-        }
-
-        // Update position
-        self.polygon.position = new_position.to_tuple();
-
-        // Handle jump buffer
-        if self.jump_buffer > 0.0 && self.is_grounded {
-            self.velocity.y = JUMP_FORCE;
-            self.is_grounded = false;
-            self.jump_buffer = 0.0;
+    pub fn render(&self, draw: &mut Draw, bodies: &RigidBodySet) {
+        if let Some(body) = bodies.get(self.body_handle) {
+            let position = body.translation();
+            draw.rect(
+                (
+                    position.x - self.size.x / 2.0,
+                    position.y - self.size.y / 2.0,
+                ),
+                (self.size.x, self.size.y),
+            )
+            .color(Color::BLUE);
         }
     }
 
-    fn update_timers(&mut self, dt: f32) {
-        if !self.is_grounded {
-            self.coyote_time = (self.coyote_time - dt).max(0.0);
-        } else {
-            self.coyote_time = 0.1; // Reset coyote time when grounded
-        }
+    pub fn debug_render(&self, draw: &mut Draw, font: &Font, bodies: &RigidBodySet) {
+        if let Some(body) = bodies.get(self.body_handle) {
+            let position = body.translation();
+            let velocity = body.linvel();
 
-        self.jump_buffer = (self.jump_buffer - dt).max(0.0);
-    }
+            // Draw velocity vector
+            let vel_end = Vec2::new(position.x + velocity.x / 5.0, position.y + velocity.y / 5.0);
+            draw.line((position.x, position.y), (vel_end.x, vel_end.y))
+                .color(Color::RED);
 
-    pub fn render(&self, draw: &mut Draw) {
-        // Draw player polygon
-        let mut path = draw.path();
-
-        path.move_to(
-            self.polygon.vertices[0].0 + self.position().x,
-            self.polygon.vertices[0].1 + self.position().y,
-        );
-        for vertex in self.polygon.vertices.iter().skip(1) {
-            path.line_to(vertex.0 + self.position().x, vertex.1 + self.position().y);
-        }
-        path.close();
-        path.color(Color::BLUE).fill();
-    }
-
-    pub fn position(&self) -> Vec2 {
-        self.polygon.position.to_vec2()
-    }
-
-    pub fn debug_render(&self, draw: &mut Draw, font: &Font) {
-        // Draw velocity vector
-        let center = self.polygon.position.to_vec2() + self.size / 2.0;
-        let vel_end = center + self.velocity / 5.0; // Scale down for visibility
-        draw.line((center.x, center.y), (vel_end.x, vel_end.y))
-            .color(Color::RED);
-
-        // Draw grounded indicator
-        let grounded_text = if self.is_grounded {
-            "Grounded"
-        } else {
-            "In Air"
-        };
-        draw.text(font, grounded_text)
-            .position(center.x, self.polygon.position.1 - 20.0)
-            .size(16.0)
-            .color(Color::WHITE);
-
-        // Draw jump buffer and coyote time indicators
-        let debug_text = format!(
-            "Jump Buffer: {:.2}\nCoyote Time: {:.2}\nVelocity: ({:.2}, {:.2})",
-            self.jump_buffer, self.coyote_time, self.velocity.x, self.velocity.y
-        );
-        draw.text(font, &debug_text)
-            .position(10.0, 10.0)
-            .size(16.0)
-            .color(Color::WHITE);
-
-        // Draw MTV
-        if let Some(mtv) = self.last_mtv {
-            let mtv_end = center + mtv.to_vec2() * 100.0; // Scale up for visibility
-            draw.line((center.x, center.y), (mtv_end.x, mtv_end.y))
-                .width(2.0)
-                .color(Color::BLUE);
-
-            let mtv_text = format!("MTV: ({:.2}, {:.2})", mtv.0, mtv.1);
-            draw.text(font, &mtv_text)
-                .position(10.0, 50.0)
+            // Draw grounded indicator
+            let grounded_text = if self.is_grounded {
+                "Grounded"
+            } else {
+                "In Air"
+            };
+            draw.text(font, grounded_text)
+                .position(position.x, position.y - self.size.y / 2.0 - 20.0)
                 .size(16.0)
                 .color(Color::WHITE);
-        }
 
-        // Add vertex order visualization
-        for (i, vertex) in self.polygon.vertices.iter().enumerate() {
-            let pos = self.polygon.position.to_vec2() + vertex.to_vec2();
-            draw.circle(3.0)
-                .position(pos.x, pos.y)
-                .color(Color::RED)
-                .fill();
-            draw.text(font, &i.to_string())
-                .position(pos.x + 5.0, pos.y + 5.0)
-                .size(12.0)
+            // Draw debug info
+            let debug_text = format!(
+                "Jump Buffer: {:.2}\nCoyote Time: {:.2}\nVelocity: ({:.2}, {:.2})",
+                self.jump_buffer, self.coyote_time, velocity.x, velocity.y
+            );
+            draw.text(font, &debug_text)
+                .position(10.0, 10.0)
+                .size(16.0)
                 .color(Color::WHITE);
+
+            self.debug_render_ground_check_rays(draw, bodies);
         }
     }
 }
