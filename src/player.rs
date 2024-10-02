@@ -1,5 +1,5 @@
 use crate::tilemap::{TileMap, TILE_SIZE};
-use macroquad::prelude::*;
+use notan::math::Vec2;
 
 pub struct Player {
     pub pos: Vec2,
@@ -17,9 +17,9 @@ enum Direction {
 impl Player {
     pub fn new(x: f32, y: f32) -> Self {
         Player {
-            pos: vec2(x, y),
-            vel: vec2(0.0, 0.0),
-            size: vec2(8.0, 8.0),
+            pos: Vec2::new(x, y),
+            vel: Vec2::ZERO,
+            size: Vec2::new(8.0, 8.0),
             on_ground: false,
             direction: Direction::Right,
         }
