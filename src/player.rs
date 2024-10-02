@@ -96,52 +96,55 @@ impl Player {
     }
 
     fn move_and_collide(&mut self, terrain: &[Polygon], dt: f32) {
+        let movement = self.velocity * dt;
         let original_position = self.polygon.position.to_vec2();
-        let mut new_position = original_position;
+        let mut new_position = original_position + movement;
 
         self.is_grounded = false;
         self.last_mtv = None;
 
-        // Apply movement in X axis
-        new_position.x += self.velocity.x * dt;
-        self.polygon.position = new_position.to_tuple();
+        let mut largest_mtv = (0.0, 0.0);
+        let mut largest_mtv_magnitude = 0.0;
 
         for terrain_poly in terrain {
+            self.polygon.position = new_position.to_tuple();
             let mtv = sat_collision(&self.polygon, terrain_poly);
-            if mtv.0 != 0.0 || mtv.1 != 0.0 {
-                new_position.x += mtv.0;
-                // self.polygon.position = new_position.to_tuple();
-                self.last_mtv = Some(mtv);
+            let mtv_magnitude = (mtv.0 * mtv.0 + mtv.1 * mtv.1).sqrt();
 
-                // Resolve velocity in X axis
-                if (mtv.0 > 0.0 && self.velocity.x < 0.0) || (mtv.0 < 0.0 && self.velocity.x > 0.0)
-                {
-                    self.velocity.x = 0.0;
-                }
+            if mtv_magnitude > largest_mtv_magnitude {
+                largest_mtv = mtv;
+                largest_mtv_magnitude = mtv_magnitude;
             }
         }
 
-        // Apply movement in Y axis
-        new_position.y += self.velocity.y * dt;
-        self.polygon.position = new_position.to_tuple();
+        if largest_mtv_magnitude > 0.0 {
+            // Debug print
+            println!("Collision detected:");
+            println!("  Player position: {:?}", new_position);
+            println!("  Player velocity: {:?}", self.velocity);
+            println!("  MTV: {:?}", largest_mtv);
 
-        for terrain_poly in terrain {
-            let mtv = sat_collision(&self.polygon, terrain_poly);
-            if mtv.0 != 0.0 || mtv.1 != 0.0 {
-                new_position.y += mtv.1;
-                self.polygon.position = new_position.to_tuple();
-                self.last_mtv = Some(mtv);
+            new_position += largest_mtv.to_vec2();
+            self.last_mtv = Some(largest_mtv);
 
-                // Resolve velocity in Y axis
-                if mtv.1 < 0.0 {
-                    self.is_grounded = true;
-                    if self.velocity.y > 0.0 {
-                        self.velocity.y = 0.0;
-                    }
-                } else if mtv.1 > 0.0 && self.velocity.y < 0.0 {
+            // Resolve velocity
+            let normal = largest_mtv.to_vec2().normalize();
+            let dot_product = self.velocity.dot(normal);
+            if dot_product < 0.0 {
+                self.velocity -= normal * dot_product;
+            }
+
+            // Check if grounded (including slopes)
+            if normal.y < -SLOPE_TOLERANCE {
+                self.is_grounded = true;
+                if self.velocity.y > 0.0 {
                     self.velocity.y = 0.0;
                 }
             }
+
+            // Debug print after resolution
+            println!("  New position: {:?}", new_position);
+            println!("  New velocity: {:?}", self.velocity);
         }
 
         // Update position
@@ -153,10 +156,6 @@ impl Player {
             self.is_grounded = false;
             self.jump_buffer = 0.0;
         }
-
-        // Debug prints
-        println!("Final position: {:?}", new_position);
-        println!("Final velocity: {:?}", self.velocity);
     }
 
     fn update_timers(&mut self, dt: f32) {
