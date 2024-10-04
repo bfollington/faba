@@ -1,5 +1,4 @@
 use notan::draw::*;
-use notan::math::{Mat4, Vec2, Vec3};
 use notan::prelude::*;
 
 mod player;
@@ -8,8 +7,10 @@ mod tilemap;
 use player::Player;
 use tilemap::{TileMap, TileType, TILE_SIZE};
 
-const WINDOW_WIDTH: u32 = 320;
-const WINDOW_HEIGHT: u32 = 240;
+const GAME_WIDTH: u32 = 320;
+const GAME_HEIGHT: u32 = 240;
+const WINDOW_WIDTH: u32 = GAME_WIDTH * 2;
+const WINDOW_HEIGHT: u32 = GAME_HEIGHT * 2;
 
 #[derive(AppState)]
 struct State {
@@ -33,7 +34,7 @@ fn main() -> Result<(), String> {
         .build()
 }
 
-fn setup(app: &mut App, gfx: &mut Graphics) -> State {
+fn setup(_app: &mut App, gfx: &mut Graphics) -> State {
     let player = Player::new(50.0, 80.0);
     let mut tilemap = TileMap::new(20, 15); // 320x240 screen with 16x16 tiles
 
@@ -72,7 +73,7 @@ fn setup(app: &mut App, gfx: &mut Graphics) -> State {
         }
     }
 
-    let post_process = PostProcessTarget::new(gfx, WINDOW_WIDTH, WINDOW_HEIGHT);
+    let post_process = PostProcessTarget::new(gfx, GAME_WIDTH, GAME_HEIGHT);
 
     State {
         player,
@@ -151,8 +152,6 @@ fn draw(app: &mut App, gfx: &mut Graphics, state: &mut State) {
     )
     .color(Color::WHITE);
 
-    gfx.render(&draw);
-
     // Render the game scene to the post-process texture
     gfx.render_to(&state.post_process.render_texture, &draw);
 
@@ -192,14 +191,9 @@ const PIXEL_INVERT_FRAGMENT: ShaderSource = notan::fragment_shader! {
         float u_value;
     };
     void main() {
-        vec2 size = vec2(u_value, u_value);
-        vec2 coord = fract(v_texcoord) * u_tex_size;
-        coord = floor(coord/size) * size;
-        vec4 tex_color = texture(u_texture, coord / u_tex_size);
-        float red = tex_color.r + ((1.0 - tex_color.r) * abs(sin(u_value)));
-        float green = tex_color.g + ((1.0 - tex_color.g) * abs(sin(u_value)));
-        float blue = tex_color.b + ((1.0 - tex_color.b) * abs(sin(u_value)));
-        outColor = vec4(red, green, blue, tex_color.a);
+        vec2 coord = v_texcoord / 2.0 + vec2(0., 0.5) - vec2(0.1 * (sin(u_value)), 0.1 * (cos(u_value)));
+        vec4 tex_color = texture(u_texture, coord);
+        outColor = tex_color;
     }
     "#
 };
@@ -282,13 +276,9 @@ impl PostProcessTarget {
     fn create_renderer(&mut self, gfx: &mut Graphics, delta: f32) -> Renderer {
         gfx.set_buffer_data(
             &self.uniform_buffer,
-            &[
-                WINDOW_WIDTH as f32,
-                WINDOW_HEIGHT as f32,
-                5.5 + self.value.sin(),
-            ],
+            &[GAME_WIDTH as f32, GAME_HEIGHT as f32, self.value],
         );
-        self.value += 0.3 * delta;
+        self.value += delta;
 
         let mut renderer = gfx.create_renderer();
 
