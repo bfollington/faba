@@ -84,17 +84,22 @@ fn update(app: &mut App, state: &mut State) {
     // Handle input
     let left = app.keyboard.is_down(KeyCode::Left);
     let right = app.keyboard.is_down(KeyCode::Right);
-
-    // Jump handling
-    if app.keyboard.is_down(KeyCode::Space) && state.player.on_ground {
-        state.player.jump();
-    }
+    let sprint = app.keyboard.is_down(KeyCode::LShift);
+    let jump_pressed = app.keyboard.is_down(KeyCode::Space);
 
     // Update player velocity based on input
-    state.player.move_horizontal(left, right, dt);
+    state.player.move_horizontal(left, right, sprint, dt);
+
+    // Handle jumping
+    if app.keyboard.was_pressed(KeyCode::Space) {
+        state.player.jump();
+    }
+    if app.keyboard.was_released(KeyCode::Space) {
+        state.player.cancel_jump();
+    }
 
     // Update player position and handle collisions
-    state.player.update(&state.tilemap, dt);
+    state.player.update(&state.tilemap, dt, jump_pressed);
 }
 
 fn draw(gfx: &mut Graphics, state: &mut State) {

@@ -12,6 +12,10 @@ pub struct Player {
     pub max_speed: Vec2,
     pub moved_amount: Vec2,
     collision_types: Vec<TileType>,
+    jump_timer: f32,
+    max_jump_time: f32,
+    jump_force: f32,
+    sprint_speed_multiplier: f32,
 }
 
 impl Player {
@@ -20,7 +24,7 @@ impl Player {
             pos: Vec2::new(x, y),
             velocity: Vec2::ZERO,
             temp_velocity: Vec2::ZERO,
-            size: Vec2::new(8.0, 16.0),
+            size: Vec2::new(8.0, 8.0),
             on_ground: false,
             acceleration: Vec2::new(0.0, 0.01),
             friction: Vec2::new(1.15, 1.0),
@@ -31,11 +35,26 @@ impl Player {
                 TileType::SlopeUpRight,
                 TileType::SlopeUpLeft,
             ],
+            jump_timer: 0.0,
+            max_jump_time: 0.1, // Maximum time the jump button can be held for higher jumps
+            jump_force: -5.0,   // Initial jump force
+            sprint_speed_multiplier: 1.5, // Speed multiplier when sprinting
         }
     }
 
-    pub fn update(&mut self, tilemap: &TileMap, dt: f32) {
+    pub fn update(&mut self, tilemap: &TileMap, dt: f32, jump_button_held: bool) {
         self.collision_bottom(tilemap);
+
+        // Handle variable height jumping
+        if jump_button_held && self.jump_timer > 0.0 {
+            self.velocity.y = self.jump_force;
+            self.jump_timer -= dt;
+            if self.jump_timer <= 0.0 {
+                self.jump_timer = 0.0;
+            }
+        } else {
+            self.jump_timer = 0.0;
+        }
 
         if !self.on_ground {
             self.velocity.y += self.acceleration.y;
@@ -181,24 +200,42 @@ impl Player {
     }
 
     fn clamp_speed(&mut self) {
-        self.velocity.x = self.velocity.x.clamp(-self.max_speed.x, self.max_speed.x);
+        let max_x_speed = if self.velocity.x.abs() > self.max_speed.x {
+            self.max_speed.x * self.sprint_speed_multiplier
+        } else {
+            self.max_speed.x
+        };
+        self.velocity.x = self.velocity.x.clamp(-max_x_speed, max_x_speed);
         self.velocity.y = self.velocity.y.clamp(-self.max_speed.y, self.max_speed.y);
     }
 
-    pub fn move_horizontal(&mut self, left: bool, right: bool, dt: f32) {
-        const ACCELERATION: f32 = 512.;
+    pub fn move_horizontal(&mut self, left: bool, right: bool, sprint: bool, dt: f32) {
+        let base_acceleration = 512.0;
+        let acceleration = if sprint {
+            base_acceleration * self.sprint_speed_multiplier
+        } else {
+            base_acceleration
+        };
 
         if left {
-            self.velocity.x -= ACCELERATION * dt;
+            self.velocity.x -= acceleration * dt;
         } else if right {
-            self.velocity.x += ACCELERATION * dt;
+            self.velocity.x += acceleration * dt;
         }
     }
 
     pub fn jump(&mut self) {
         if self.on_ground {
-            self.velocity.y = -5.0; // Adjust this value to change jump height
+            self.velocity.y = self.jump_force;
+            self.jump_timer = self.max_jump_time;
             self.on_ground = false;
         }
+    }
+
+    pub fn cancel_jump(&mut self) {
+        if self.velocity.y < 0.0 {
+            self.velocity.y *= 0.5; // Reduce upward velocity when jump is cancelled
+        }
+        self.jump_timer = 0.0;
     }
 }
