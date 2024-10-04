@@ -1,5 +1,7 @@
 use crate::tilemap::{TileMap, TileType, TILE_SIZE};
+use notan::draw::*;
 use notan::math::Vec2;
+use notan::prelude::*;
 
 pub struct Player {
     pub pos: Vec2,
@@ -28,7 +30,7 @@ impl Player {
             on_ground: false,
             acceleration: Vec2::new(0.0, 0.01),
             friction: Vec2::new(1.15, 1.0),
-            max_speed: Vec2::new(2.0, 10.0),
+            max_speed: Vec2::new(2., 10.0),
             moved_amount: Vec2::ZERO,
             collision_types: vec![
                 TileType::Solid,
@@ -38,7 +40,7 @@ impl Player {
             jump_timer: 0.0,
             max_jump_time: 0.1, // Maximum time the jump button can be held for higher jumps
             jump_force: -5.0,   // Initial jump force
-            sprint_speed_multiplier: 1.5, // Speed multiplier when sprinting
+            sprint_speed_multiplier: 2., // Speed multiplier when sprinting
         }
     }
 
@@ -210,7 +212,7 @@ impl Player {
     }
 
     pub fn move_horizontal(&mut self, left: bool, right: bool, sprint: bool, dt: f32) {
-        let base_acceleration = 512.0;
+        let base_acceleration = 420.0;
         let acceleration = if sprint {
             base_acceleration * self.sprint_speed_multiplier
         } else {
@@ -237,5 +239,92 @@ impl Player {
             self.velocity.y *= 0.5; // Reduce upward velocity when jump is cancelled
         }
         self.jump_timer = 0.0;
+    }
+
+    pub fn render_debug(&self, draw: &mut Draw, tilemap: &TileMap) {
+        // Render player bounding box
+        draw.rect((self.pos.x, self.pos.y), (self.size.x, self.size.y))
+            .stroke_color(Color::RED);
+
+        // Render collision points
+        let points = [
+            (self.pos.x, self.pos.y),
+            (self.pos.x + self.size.x - 1.0, self.pos.y),
+            (self.pos.x, self.pos.y + self.size.y - 1.0),
+            (
+                self.pos.x + self.size.x - 1.0,
+                self.pos.y + self.size.y - 1.0,
+            ),
+        ];
+
+        for point in points.iter() {
+            draw.rect((point.0, point.1), (2.0, 2.0))
+                .color(Color::GREEN);
+        }
+
+        // Draw X velocity vector
+        draw.line(
+            (
+                self.pos.x + self.size.x / 2.0,
+                self.pos.y + self.size.y / 2.0,
+            ),
+            (
+                self.pos.x + self.size.x / 2.0 + self.velocity.x * 10.0,
+                self.pos.y + self.size.y / 2.0,
+            ),
+        )
+        .color(Color::RED);
+
+        // Draw Y velocity vector
+        draw.line(
+            (
+                self.pos.x + self.size.x / 2.0,
+                self.pos.y + self.size.y / 2.0,
+            ),
+            (
+                self.pos.x + self.size.x / 2.0,
+                self.pos.y + self.size.y / 2.0 + self.velocity.y * 10.0,
+            ),
+        )
+        .color(Color::BLUE);
+
+        // Render tiles that the player is colliding with
+        for y in (self.pos.y as i32 - 1..=(self.pos.y + self.size.y) as i32 + 1) {
+            for x in (self.pos.x as i32 - 1..=(self.pos.x + self.size.x) as i32 + 1) {
+                let tile_type = tilemap.get_tile_type(x as f32, y as f32);
+                match tile_type {
+                    TileType::Solid => {
+                        draw.rect(
+                            (x as f32 * TILE_SIZE, y as f32 * TILE_SIZE),
+                            (TILE_SIZE, TILE_SIZE),
+                        )
+                        .stroke_color(Color::BLUE);
+                    }
+                    TileType::SlopeUpRight | TileType::SlopeUpLeft => {
+                        draw.rect(
+                            (x as f32 * TILE_SIZE, y as f32 * TILE_SIZE),
+                            (TILE_SIZE, TILE_SIZE),
+                        )
+                        .stroke_color(Color::YELLOW);
+
+                        // Draw slope line
+                        let (start, end) = if tile_type == TileType::SlopeUpRight {
+                            (
+                                (x as f32 * TILE_SIZE, (y + 1) as f32 * TILE_SIZE),
+                                ((x + 1) as f32 * TILE_SIZE, y as f32 * TILE_SIZE),
+                            )
+                        } else {
+                            (
+                                (x as f32 * TILE_SIZE, y as f32 * TILE_SIZE),
+                                ((x + 1) as f32 * TILE_SIZE, (y + 1) as f32 * TILE_SIZE),
+                            )
+                        };
+                        draw.line((start.0, start.1), (end.0, end.1))
+                            .color(Color::YELLOW);
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 }
