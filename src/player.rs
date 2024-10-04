@@ -1,168 +1,203 @@
-use crate::tilemap::{TileMap, TILE_SIZE};
+use crate::tilemap::{TileMap, TileType, TILE_SIZE};
 use notan::math::Vec2;
 
 pub struct Player {
     pub pos: Vec2,
-    pub vel: Vec2,
+    pub velocity: Vec2,
+    pub temp_velocity: Vec2,
     pub size: Vec2,
     pub on_ground: bool,
+    pub acceleration: Vec2,
+    pub friction: Vec2,
+    pub max_speed: Vec2,
+    pub moved_amount: Vec2,
+    collision_types: Vec<TileType>,
 }
 
 impl Player {
     pub fn new(x: f32, y: f32) -> Self {
         Player {
             pos: Vec2::new(x, y),
-            vel: Vec2::ZERO,
-            size: Vec2::new(8.0, 8.0),
+            velocity: Vec2::ZERO,
+            temp_velocity: Vec2::ZERO,
+            size: Vec2::new(8.0, 16.0),
             on_ground: false,
+            acceleration: Vec2::new(0.0, 0.01),
+            friction: Vec2::new(1.15, 1.0),
+            max_speed: Vec2::new(2.0, 10.0),
+            moved_amount: Vec2::ZERO,
+            collision_types: vec![
+                TileType::Solid,
+                TileType::SlopeUpRight,
+                TileType::SlopeUpLeft,
+            ],
         }
     }
 
     pub fn update(&mut self, tilemap: &TileMap, dt: f32) {
-        // Apply gravity
+        self.collision_bottom(tilemap);
+
         if !self.on_ground {
-            self.vel.y += 800.0 * dt; // Gravity constant
-            self.vel.y = self.vel.y.min(400.0); // Terminal velocity
+            self.velocity.y += self.acceleration.y;
         }
 
-        // Horizontal movement and collision
-        self.handle_horizontal_movement(tilemap, dt);
+        self.velocity.x /= self.friction.x;
+        if !self.on_ground {
+            self.velocity.y /= self.friction.y;
+        }
 
-        // Vertical movement and collision
-        self.handle_vertical_movement(tilemap, dt);
-
-        // Check if on ground
-        self.check_on_ground(tilemap);
+        self.move_object(tilemap, dt);
+        self.clamp_speed();
     }
 
-    fn handle_horizontal_movement(&mut self, tilemap: &TileMap, dt: f32) {
-        let move_amount = self.vel.x * dt;
-        let mut remaining_movement = move_amount.abs();
-        let direction = move_amount.signum();
+    fn move_object(&mut self, tilemap: &TileMap, dt: f32) {
+        self.temp_velocity.x += self.velocity.x.abs() * dt * 60.0;
+        self.temp_velocity.y += self.velocity.y.abs() * dt * 60.0;
 
-        while remaining_movement > 0.0 {
-            let step = remaining_movement.min(1.0) * direction;
-            let new_x = self.pos.x + step;
+        let horizontal_direction = self.velocity.x.signum() as i32;
+        let vertical_direction = self.velocity.y.signum() as i32;
 
-            if self.can_move_to(tilemap, new_x, self.pos.y) {
-                self.pos.x = new_x;
-                self.try_step_down(tilemap);
-                remaining_movement -= step.abs();
-            } else if self.can_move_to(tilemap, new_x, self.pos.y - 1.0) {
-                // Step up
-                self.pos.x = new_x;
-                self.pos.y -= 1.0;
-                remaining_movement -= step.abs();
+        while self.temp_velocity.y >= 1.0 {
+            self.move_y(tilemap, vertical_direction);
+            self.temp_velocity.y -= 1.0;
+        }
+
+        while self.temp_velocity.x >= 1.0 {
+            if self.move_x(tilemap, horizontal_direction) {
+                self.temp_velocity.x -= 1.0;
             } else {
-                // Collision, stop movement
-                self.vel.x = 0.0;
                 break;
             }
         }
     }
 
-    fn can_move_to(&self, tilemap: &TileMap, x: f32, y: f32) -> bool {
+    fn move_x(&mut self, tilemap: &TileMap, dir: i32) -> bool {
+        self.moved_amount.x += 1.0;
+        let new_x = self.pos.x + dir as f32;
+
+        if !self.collide(tilemap, new_x, self.pos.y) {
+            if !self.collide(tilemap, new_x, self.pos.y + 1.0)
+                && self.collide(tilemap, self.pos.x, self.pos.y + 1.0)
+            {
+                self.pos.y += 1.0;
+            }
+            self.pos.x = new_x;
+            self.try_step_up_slope(tilemap, dir);
+        } else if self.try_step_up_slope(tilemap, dir) {
+            // Successfully stepped up a slope
+        } else {
+            self.hit_wall();
+            return false;
+        }
+        true
+    }
+
+    fn move_y(&mut self, tilemap: &TileMap, dir: i32) {
+        self.moved_amount.y += 1.0;
+        let new_y = self.pos.y + dir as f32;
+
+        if !self.collide(tilemap, self.pos.x, new_y) {
+            self.pos.y = new_y;
+        } else if dir > 0 {
+            // Moving down, check for slopes
+            self.try_step_down_slope(tilemap);
+        }
+
+        if self.collide(tilemap, self.pos.x, self.pos.y - 1.0) {
+            self.velocity.y = 0.0;
+        }
+    }
+
+    fn try_step_up_slope(&mut self, tilemap: &TileMap, dir: i32) -> bool {
+        for step in 1..=((TILE_SIZE / 2.0) as i32) {
+            if !self.collide(tilemap, self.pos.x + dir as f32, self.pos.y - step as f32) {
+                self.pos.x += dir as f32;
+                self.pos.y -= step as f32;
+                return true;
+            }
+        }
+        false
+    }
+
+    fn try_step_down_slope(&mut self, tilemap: &TileMap) {
+        let mut step = 1;
+        while step <= (TILE_SIZE as i32)
+            && !self.collide(tilemap, self.pos.x, self.pos.y + step as f32)
+        {
+            step += 1;
+        }
+        if step > 1 {
+            self.pos.y += (step - 1) as f32;
+        }
+    }
+
+    fn collide(&self, tilemap: &TileMap, x: f32, y: f32) -> bool {
         let left = x;
         let right = x + self.size.x - 1.0;
         let top = y;
         let bottom = y + self.size.y - 1.0;
 
-        !tilemap.is_pixel_solid(left, top)
-            && !tilemap.is_pixel_solid(right, top)
-            && !tilemap.is_pixel_solid(left, bottom)
-            && !tilemap.is_pixel_solid(right, bottom)
-    }
-
-    fn try_step_down(&mut self, tilemap: &TileMap) {
-        let max_step_down = 3; // Maximum pixels to step down
-        for step in 1..=max_step_down {
-            let test_y = self.pos.y + step as f32;
-            if self.can_move_to(tilemap, self.pos.x, test_y) {
-                if tilemap.is_pixel_solid(self.pos.x, test_y + self.size.y)
-                    || tilemap.is_pixel_solid(self.pos.x + self.size.x - 1.0, test_y + self.size.y)
-                {
-                    self.pos.y = test_y;
-                    break;
+        for check_y in [top, bottom] {
+            for check_x in [left, right] {
+                let tile_type = tilemap.get_tile_type(check_x, check_y);
+                match tile_type {
+                    TileType::Solid => return true,
+                    TileType::SlopeUpRight => {
+                        let tile_x = (check_x / TILE_SIZE).floor() * TILE_SIZE;
+                        let tile_y = (check_y / TILE_SIZE).floor() * TILE_SIZE;
+                        let slope_y = TILE_SIZE - (check_x - tile_x);
+                        if check_y >= tile_y + slope_y {
+                            return true;
+                        }
+                    }
+                    TileType::SlopeUpLeft => {
+                        let tile_x = (check_x / TILE_SIZE).floor() * TILE_SIZE;
+                        let tile_y = (check_y / TILE_SIZE).floor() * TILE_SIZE;
+                        let slope_y = check_x - tile_x;
+                        if check_y >= tile_y + slope_y {
+                            return true;
+                        }
+                    }
+                    _ => {}
                 }
-            } else {
-                break;
             }
         }
+        false
     }
 
-    fn handle_vertical_movement(&mut self, tilemap: &TileMap, dt: f32) {
-        let move_amount = self.vel.y * dt;
-        let mut new_y = self.pos.y + move_amount;
-
-        if move_amount > 0.0 {
-            // Moving down
-            let floor_y = self.find_floor(tilemap, new_y);
-            if floor_y < new_y + self.size.y {
-                new_y = floor_y - self.size.y;
-                self.vel.y = 0.0;
-                self.on_ground = true;
-            }
-        } else {
-            // Moving up
-            if self.check_ceiling(tilemap, new_y) {
-                new_y = new_y.ceil();
-                self.vel.y = 0.0;
-            }
-        }
-
-        self.pos.y = new_y;
-    }
-
-    fn find_floor(&self, tilemap: &TileMap, start_y: f32) -> f32 {
-        let mut y = start_y;
-        let bottom = start_y + self.size.y;
-        while y <= bottom && y < (tilemap.height as f32 * TILE_SIZE) {
-            if tilemap.is_pixel_solid(self.pos.x, y)
-                || tilemap.is_pixel_solid(self.pos.x + self.size.x - 1.0, y)
-            {
-                return y;
-            }
-            y += 1.0;
-        }
-        bottom
-    }
-
-    fn check_ceiling(&self, tilemap: &TileMap, y: f32) -> bool {
-        tilemap.is_pixel_solid(self.pos.x, y)
-            || tilemap.is_pixel_solid(self.pos.x + self.size.x - 1.0, y)
-    }
-
-    fn check_on_ground(&mut self, tilemap: &TileMap) {
+    fn collision_bottom(&mut self, tilemap: &TileMap) {
+        self.on_ground = false;
         let feet_y = self.pos.y + self.size.y;
-        self.on_ground = tilemap.is_pixel_solid(self.pos.x, feet_y)
-            || tilemap.is_pixel_solid(self.pos.x + self.size.x - 1.0, feet_y);
+        if self.collide(tilemap, self.pos.x, feet_y)
+            || self.collide(tilemap, self.pos.x + self.size.x - 1.0, feet_y)
+        {
+            self.on_ground = true;
+        }
+    }
+
+    fn hit_wall(&mut self) {
+        self.temp_velocity.x = 0.0;
+        self.velocity.x = 0.0;
+    }
+
+    fn clamp_speed(&mut self) {
+        self.velocity.x = self.velocity.x.clamp(-self.max_speed.x, self.max_speed.x);
+        self.velocity.y = self.velocity.y.clamp(-self.max_speed.y, self.max_speed.y);
     }
 
     pub fn move_horizontal(&mut self, left: bool, right: bool, dt: f32) {
-        const ACCELERATION: f32 = 800.0;
-        const MAX_SPEED: f32 = 96.0;
+        const ACCELERATION: f32 = 512.;
 
         if left {
-            self.vel.x -= ACCELERATION * dt;
+            self.velocity.x -= ACCELERATION * dt;
         } else if right {
-            self.vel.x += ACCELERATION * dt;
-        } else {
-            // Apply friction
-            let friction = 1000.0 * dt;
-            if self.vel.x > 0.0 {
-                self.vel.x = (self.vel.x - friction).max(0.0);
-            } else if self.vel.x < 0.0 {
-                self.vel.x = (self.vel.x + friction).min(0.0);
-            }
+            self.velocity.x += ACCELERATION * dt;
         }
-
-        // Clamp horizontal speed
-        self.vel.x = self.vel.x.clamp(-MAX_SPEED, MAX_SPEED);
     }
 
     pub fn jump(&mut self) {
         if self.on_ground {
-            self.vel.y = -325.0; // Jump force
+            self.velocity.y = -5.0; // Adjust this value to change jump height
             self.on_ground = false;
         }
     }

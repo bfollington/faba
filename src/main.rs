@@ -85,12 +85,9 @@ fn update(app: &mut App, state: &mut State) {
     let left = app.keyboard.is_down(KeyCode::Left);
     let right = app.keyboard.is_down(KeyCode::Right);
 
-    // Jump handling with cooldown
-    state.jump_cooldown -= dt;
-    if app.keyboard.is_down(KeyCode::Space) && state.jump_cooldown <= 0.0 && state.player.on_ground
-    {
+    // Jump handling
+    if app.keyboard.is_down(KeyCode::Space) && state.player.on_ground {
         state.player.jump();
-        state.jump_cooldown = 0.2; // 200ms cooldown
     }
 
     // Update player velocity based on input

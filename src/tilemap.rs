@@ -52,4 +52,14 @@ impl TileMap {
             TileType::Empty => false,
         }
     }
+
+    pub fn is_tile_type(&self, x: f32, y: f32, tile_type: TileType) -> bool {
+        let tile_x = (x / TILE_SIZE) as usize;
+        let tile_y = (y / TILE_SIZE) as usize;
+        if tile_x < self.width && tile_y < self.height {
+            self.tiles[tile_y][tile_x] == tile_type
+        } else {
+            false
+        }
+    }
 }
