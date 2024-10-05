@@ -491,6 +491,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "faba"
+version = "0.1.0"
+dependencies = [
+ "notan",
+ "serde",
+ "serde_json",
+ "simple-easing",
+ "spring_motion",
+]
+
+[[package]]
 name = "fake-simd"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1047,17 +1058,6 @@ dependencies = [
  "float_next_after",
  "lyon_path",
  "num-traits",
-]
-
-[[package]]
-name = "macroquad-cavestory"
-version = "0.1.0"
-dependencies = [
- "notan",
- "serde",
- "serde_json",
- "simple-easing",
- "spring_motion",
 ]
 
 [[package]]

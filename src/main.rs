@@ -27,7 +27,7 @@ struct State {
 fn main() -> Result<(), String> {
     let win_config = WindowConfig::new()
         .set_size(WINDOW_WIDTH, WINDOW_HEIGHT)
-        .set_title("p*xelf*ck");
+        .set_title("faba");
 
     notan::init_with(setup)
         .add_config(win_config)

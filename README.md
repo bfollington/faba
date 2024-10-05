@@ -1,0 +1,1 @@
+> **Pinnixa faba**, known as the pea crab, mantle pea crab or large pea crab, is a pea crab[1] which lives harmlessly within a large edible clam. This species is a symbiont of Tresus capax and Tresus nuttallii in its mature stage.
