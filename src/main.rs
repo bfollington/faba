@@ -5,6 +5,7 @@ mod player;
 mod render;
 mod soko;
 mod tilemap;
+mod timer;
 
 use player::Player;
 use render::PostProcessTarget;
