@@ -3,6 +3,7 @@ use notan::prelude::*;
 
 mod player;
 mod render;
+mod soko;
 mod tilemap;
 
 use player::Player;
@@ -16,7 +17,7 @@ const WINDOW_HEIGHT: u32 = GAME_HEIGHT * 2;
 
 #[derive(AppState)]
 struct State {
-    player: Player,
+    soko_player: soko::SokoPlayer,
     tilemap: TileMap,
     jump_cooldown: f32,
     post_process: PostProcessTarget,
@@ -26,7 +27,7 @@ struct State {
 fn main() -> Result<(), String> {
     let win_config = WindowConfig::new()
         .set_size(WINDOW_WIDTH, WINDOW_HEIGHT)
-        .set_title("Cave Story Movement with Slopes");
+        .set_title("p*xelf*ck");
 
     notan::init_with(setup)
         .add_config(win_config)
@@ -45,15 +46,15 @@ fn setup(_app: &mut App, gfx: &mut Graphics) -> State {
         tilemap.set_tile(x, 14, TileType::Solid); // Ground
     }
 
-    // Create a slope going up-right
-    for x in 5..9 {
-        tilemap.set_tile(x, 13 - (x - 5), TileType::SlopeUpRight);
-    }
+    // // Create a slope going up-right
+    // for x in 5..9 {
+    //     tilemap.set_tile(x, 13 - (x - 5), TileType::SlopeUpRight);
+    // }
 
-    // Create a slope going up-left
-    for x in 12..17 {
-        tilemap.set_tile(x, 9 + (x - 12), TileType::SlopeUpLeft);
-    }
+    // // Create a slope going up-left
+    // for x in 12..17 {
+    //     tilemap.set_tile(x, 9 + (x - 12), TileType::SlopeUpLeft);
+    // }
 
     // Add some platforms
     for x in 2..7 {
@@ -63,22 +64,23 @@ fn setup(_app: &mut App, gfx: &mut Graphics) -> State {
         tilemap.set_tile(x, 5, TileType::Solid);
     }
 
-    // Fill the area under the slopes with solid tiles
-    for x in 5..9 {
-        for y in (14 - (x - 5))..14 {
-            tilemap.set_tile(x, y, TileType::Solid);
-        }
-    }
-    for x in 12..17 {
-        for y in (10 + (x - 12))..14 {
-            tilemap.set_tile(x, y, TileType::Solid);
-        }
-    }
+    // // Fill the area under the slopes with solid tiles
+    // for x in 5..9 {
+    //     for y in (14 - (x - 5))..14 {
+    //         tilemap.set_tile(x, y, TileType::Solid);
+    //     }
+    // }
+    // for x in 12..17 {
+    //     for y in (10 + (x - 12))..14 {
+    //         tilemap.set_tile(x, y, TileType::Solid);
+    //     }
+    // }
 
     let post_process = PostProcessTarget::new(gfx, GAME_WIDTH, GAME_HEIGHT);
+    let soko_player = soko::SokoPlayer::new(0, 0);
 
     State {
-        player,
+        soko_player,
         tilemap,
         jump_cooldown: 0.0,
         post_process,
@@ -88,25 +90,12 @@ fn setup(_app: &mut App, gfx: &mut Graphics) -> State {
 fn update(app: &mut App, state: &mut State) {
     let dt = app.timer.delta_f32();
 
-    // Handle input
-    let left = app.keyboard.is_down(KeyCode::Left);
-    let right = app.keyboard.is_down(KeyCode::Right);
-    let sprint = app.keyboard.is_down(KeyCode::LShift);
-    let jump_pressed = app.keyboard.is_down(KeyCode::Space);
+    let left = app.keyboard.was_pressed(KeyCode::Left);
+    let right = app.keyboard.was_pressed(KeyCode::Right);
+    let up = app.keyboard.was_pressed(KeyCode::Up);
+    let down = app.keyboard.was_pressed(KeyCode::Down);
 
-    // Update player velocity based on input
-    state.player.move_horizontal(left, right, sprint, dt);
-
-    // Handle jumping
-    if app.keyboard.was_pressed(KeyCode::Space) {
-        state.player.jump();
-    }
-    if app.keyboard.was_released(KeyCode::Space) {
-        state.player.cancel_jump();
-    }
-
-    // Update player position and handle collisions
-    state.player.update(&state.tilemap, dt, jump_pressed);
+    state.soko_player.update(dt, left, right, up, down);
 }
 
 fn draw(app: &mut App, gfx: &mut Graphics, state: &mut State) {
@@ -145,14 +134,8 @@ fn draw(app: &mut App, gfx: &mut Graphics, state: &mut State) {
         }
     }
 
-    state.player.render_debug(&mut draw, &state.tilemap);
-
-    // Draw player
-    draw.rect(
-        (state.player.pos.x, state.player.pos.y),
-        (state.player.size.x, state.player.size.y),
-    )
-    .color(Color::WHITE);
+    // // Draw player
+    state.soko_player.draw(&mut draw);
 
     // Render the game scene to the post-process texture
     gfx.render_to(&state.post_process.render_texture, &draw);

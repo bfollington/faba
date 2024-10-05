@@ -7,3 +7,5 @@ edition = "2021"
 serde_json = "1.0.96"
 serde = { version = "1.0.162", features = ["derive"] }
 notan = "0.12.1"
+spring_motion = "0.1.0"
+simple-easing = "1.0.1"

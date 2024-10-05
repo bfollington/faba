@@ -135,7 +135,7 @@ const PIXEL_INVERT_FRAGMENT: ShaderSource = notan::fragment_shader! {
     }
 
     const float simpleNoiseStrength = 0.005;
-    const float perlinNoiseStrength = 0.01;
+    const float perlinNoiseStrength = 0.00;
     const float noiseSpeed = 2.0;
 
     // Simple noise function
