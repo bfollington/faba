@@ -4,11 +4,13 @@ use notan::prelude::*;
 mod player;
 mod render;
 mod soko;
+mod textbox;
 mod tilemap;
 mod timer;
 
 use player::Player;
 use render::PostProcessTarget;
+use textbox::{Conversation, Textbox};
 use tilemap::{TileMap, TileType, TILE_SIZE};
 
 const GAME_WIDTH: u32 = 320;
@@ -22,6 +24,7 @@ struct State {
     tilemap: TileMap,
     jump_cooldown: f32,
     post_process: PostProcessTarget,
+    conversation: Conversation,
 }
 
 #[notan_main]
@@ -80,11 +83,20 @@ fn setup(_app: &mut App, gfx: &mut Graphics) -> State {
     let post_process = PostProcessTarget::new(gfx, GAME_WIDTH, GAME_HEIGHT);
     let soko_player = soko::SokoPlayer::new(0, 0);
 
+    let mut conversation = Conversation::new(vec![
+        textbox::Message::Text("This.".to_string()),
+        textbox::Message::Text("This is a test.".to_string()),
+        textbox::Message::Text("This is only a test.".to_string()),
+        textbox::Message::Text("This is a test of the emergency broadcast system.".to_string()),
+    ]);
+    conversation.setup(gfx);
+
     State {
         soko_player,
         tilemap,
         jump_cooldown: 0.0,
         post_process,
+        conversation,
     }
 }
 
@@ -95,8 +107,14 @@ fn update(app: &mut App, state: &mut State) {
     let right = app.keyboard.was_pressed(KeyCode::Right);
     let up = app.keyboard.was_pressed(KeyCode::Up);
     let down = app.keyboard.was_pressed(KeyCode::Down);
+    let advance = app.keyboard.was_pressed(KeyCode::Space);
+
+    if advance && state.conversation.textbox.finished_printing() {
+        state.conversation.advance();
+    }
 
     state.soko_player.update(dt, left, right, up, down);
+    state.conversation.update(dt);
 }
 
 fn draw(app: &mut App, gfx: &mut Graphics, state: &mut State) {
@@ -137,6 +155,7 @@ fn draw(app: &mut App, gfx: &mut Graphics, state: &mut State) {
 
     // // Draw player
     state.soko_player.draw(&mut draw);
+    state.conversation.draw(&mut draw);
 
     // Render the game scene to the post-process texture
     gfx.render_to(&state.post_process.render_texture, &draw);
