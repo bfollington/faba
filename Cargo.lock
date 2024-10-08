@@ -495,6 +495,7 @@ name = "faba"
 version = "0.1.0"
 dependencies = [
  "notan",
+ "rand",
  "serde",
  "serde_json",
  "simple-easing",
